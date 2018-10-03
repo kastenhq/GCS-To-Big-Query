@@ -1,4 +1,4 @@
 {
-  "DATASET": "cloudflare_logs",
-  "TABLE": "cloudflare_logs"
+  "DATASET": "test",
+  "TABLE": "test"
 }

@@ -22,9 +22,11 @@
 const config = require('./config.json');
 
 // Get a reference to the Cloud Storage component
-const storage = require('@google-cloud/storage')();
+const {Storage} = require('@google-cloud/storage');
+const storage = new Storage();
 // Get a reference to the BigQuery component
-const bigquery = require('@google-cloud/bigquery')();
+const BigQuery = require('@google-cloud/bigquery');
+const bigquery = new BigQuery();
 // Lightweight HTTP client to parse remote JSON
 const fetch = require('node-fetch');
 
@@ -38,18 +40,7 @@ let _schema;
 const backupSchema = require('./schema.json');
 
 const getSchema = () => {
-    return fetch('https://json-public.cfiq.io/schema.json')
-      .then(res => {
-        return res.json()
-      })
-      .then(json => {
-        _schema = json
-        return _schema
-      }).catch(e => {
-        console.log(e)
-        _schema = backupSchema
-        return _schema
-      });
+    return  backupSchema;
   }
   // [END functions_cloudflare_setup]
 
@@ -65,7 +56,8 @@ function getTable() {
       autoCreate: true
     })
     .then(([dataset]) => dataset.table(config.TABLE).get({
-      autoCreate: true
+      autoCreate: true,
+      schema: getSchema()
     }));
 }
 // [END functions_cloudflare_get_table]
@@ -83,7 +75,6 @@ function getTable() {
  */
 exports.jsonLoad = function jsonLoad(event) {
   const file = event.data;
-
   if (file.resourceState === 'not_exists') {
     // This was a deletion event, we don't want to process this
     return;
@@ -96,26 +87,26 @@ exports.jsonLoad = function jsonLoad(event) {
       } else if (!file.name) {
         throw new Error('Filename not provided. Make sure you have a "name" property in your request');
       }
-
       return getTable();
     })
     .then(([table]) => {
       const fileObj = storage.bucket(file.bucket).file(file.name);
       console.log(`Starting job for ${file.name}`);
       const metadata = {
-        autodetect: false,
-        sourceFormat: 'NEWLINE_DELIMITED_JSON',
-        schema: {
-          fields: _schema
-        }
+        sourceFormat: 'NEWLINE_DELIMITED_JSON'
       };
-      return table.import(fileObj, metadata);
-    })
-    .then(([job]) => job.promise())
-    .then(() => console.log(`Job complete for ${file.name}`))
-    .catch((err) => {
-      console.log(`Job failed for ${file.name}`);
-      return Promise.reject(err);
+      table.load(fileObj, metadata).then(function(data) {
+        const job = bigquery.job(data[0].jobReference.jobId);
+        job.on('complete', function(metadata) {
+          console.log(`Job complete for ${file.name}`);
+          return job
+        });
+        job.on('error', function(err) {
+          job.cancel();
+          console.log(`Job failed for ${file.name}`);
+          return Promise.reject(err);
+        });
+      });
     });
 };
 // [END functions_jsonLoad]
